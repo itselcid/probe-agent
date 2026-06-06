@@ -149,11 +149,11 @@ class ToolValidationError(ToolError):
 # ---------------------------------------------------------------------------
 
 class LLMError(AgentError):
-    """Base class for errors from the Gemini LLM API."""
+    """Base class for errors from LLM provider APIs."""
 
 
 class LLMRateLimitError(LLMError):
-    """Gemini API returned HTTP 429 — rate limit exceeded.
+    """LLM API returned HTTP 429 — rate limit exceeded.
 
     Attributes:
         retry_after_seconds: Suggested wait time before retrying, if provided
@@ -166,7 +166,7 @@ class LLMRateLimitError(LLMError):
         context: dict[str, Any] | None = None,
     ) -> None:
         self.retry_after_seconds = retry_after_seconds
-        msg = "Gemini API rate limit exceeded"
+        msg = "LLM API rate limit exceeded"
         if retry_after_seconds is not None:
             msg += f" (retry after {retry_after_seconds}s)"
         super().__init__(
@@ -207,7 +207,7 @@ class LLMContextOverflowError(LLMError):
 
 
 class LLMResponseError(LLMError):
-    """The Gemini API returned an unexpected or malformed response.
+    """The LLM API returned an unexpected or malformed response.
 
     Attributes:
         status_code: HTTP status code, if applicable.

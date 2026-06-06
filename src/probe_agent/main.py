@@ -32,8 +32,8 @@ console = Console()
 def main(project: str, task: str) -> None:
     """ProbeAgent — autonomous DevOps/SRE agent.
 
-    Runs TASK against the project at --project, using Gemini for reasoning
-    and a pluggable tool system for interacting with infrastructure.
+    Runs TASK against the project at --project, using a pluggable LLM
+    provider for reasoning and tools for interacting with infrastructure.
 
     \b
     Examples:
@@ -54,9 +54,13 @@ def main(project: str, task: str) -> None:
     log = get_logger("probe_agent.main")
 
     # --- Banner -------------------------------------------------------------
+    # Resolve the display model name.
+    display_model = settings.llm_model or f"{settings.llm_provider} (default)"
+
     console.print(
         f"\n[bold cyan]🔍 ProbeAgent v{__version__}[/bold cyan]"
-        f"  •  model=[green]{settings.model_name}[/green]"
+        f"  •  provider=[magenta]{settings.llm_provider}[/magenta]"
+        f"  •  model=[green]{display_model}[/green]"
         f"  •  max_steps=[yellow]{settings.max_steps}[/yellow]\n"
     )
     console.print(f"[dim]Project:[/dim]  {settings.project_path}")
@@ -66,7 +70,8 @@ def main(project: str, task: str) -> None:
         "agent_start",
         task=task,
         project=settings.project_path,
-        model=settings.model_name,
+        provider=settings.llm_provider,
+        model=display_model,
         max_steps=settings.max_steps,
     )
 

@@ -59,7 +59,7 @@ class ToolCall(BaseModel):
 
 
 class LLMResponse(BaseModel):
-    """Parsed response from the Gemini API.
+    """Parsed response from an LLM provider.
 
     Attributes:
         content: Text content of the response, if any.  Will be ``None``
