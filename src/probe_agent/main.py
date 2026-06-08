@@ -1,13 +1,12 @@
 """CLI entry-point for ProbeAgent.
 
-Uses ``click`` to expose the ``probe-agent`` command.  The heavy lifting
-(agent loop, tool registry, LLM calls) will be wired up in future modules;
-this module is intentionally kept thin so the CLI surface is easy to test
-and extend independently.
+Uses ``click`` to expose the ``probe-agent`` command.  Wires up the
+LLM provider, tool registry, and agent loop.
 """
 
 from __future__ import annotations
 
+import asyncio
 import sys
 
 import click
@@ -75,10 +74,67 @@ def main(project: str, task: str) -> None:
         max_steps=settings.max_steps,
     )
 
-    # --- Agent loop (placeholder) -------------------------------------------
-    # TODO: Wire up the agent loop, tool registry, and Gemini client.
-    console.print("[yellow]⚠  Agent loop not yet implemented — exiting.[/yellow]")
-    log.info("agent_end", reason="not_implemented")
+    # --- Wire up the agent --------------------------------------------------
+    from probe_agent.agent import ProbeAgent
+    from probe_agent.llm_client import create_llm_provider
+    from probe_agent.registry import ToolRegistry
+    from probe_agent.tools.docker_tools import register_docker_tools
+    from probe_agent.tools.fs import register_fs_tools
+    from probe_agent.tools.git import register_git_tools
+    from probe_agent.tools.shell import register_shell_tools
+
+    # Create LLM provider.
+    llm = create_llm_provider(
+        provider=settings.llm_provider,
+        api_key=settings.llm_api_key,
+        model_name=settings.llm_model,
+    )
+
+    # Build the tool registry.
+    registry = ToolRegistry()
+    register_fs_tools(registry)
+    register_git_tools(registry)
+    register_docker_tools(registry)
+    register_shell_tools(registry)
+
+    console.print(
+        f"[dim]Tools:[/dim]    {registry.count()} across "
+        f"{registry.list_namespaces()}\n"
+    )
+
+    # Create and run the agent.
+    agent = ProbeAgent(config=settings, registry=registry, llm=llm)
+
+    try:
+        result = asyncio.run(agent.run(task))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        sys.exit(130)
+    except Exception as exc:
+        console.print(f"\n[bold red]Agent error:[/bold red] {exc}")
+        log.error("agent_error", error=str(exc), exc_info=True)
+        sys.exit(1)
+
+    # --- Print result -------------------------------------------------------
+    if result.success:
+        console.print(f"\n[bold green]✅ Done[/bold green] in {result.steps} steps "
+                       f"({result.total_tokens:,} tokens)")
+    else:
+        console.print(f"\n[bold yellow]⚠ Max steps reached[/bold yellow] "
+                       f"({result.steps} steps, {result.total_tokens:,} tokens)")
+
+    console.print(f"\n[dim]Tools used:[/dim] {', '.join(result.tools_used) or 'none'}\n")
+
+    if result.final_response:
+        console.print(result.final_response)
+
+    log.info(
+        "agent_end",
+        steps=result.steps,
+        total_tokens=result.total_tokens,
+        success=result.success,
+        tools_used=result.tools_used,
+    )
 
 
 if __name__ == "__main__":
