@@ -2,12 +2,16 @@
 
 Uses ``structlog`` to produce machine-readable JSON log lines with
 timestamps, log level, caller information, and arbitrary key/value context.
+
+Every agent run gets a unique ``session_id`` (UUID4) that is automatically
+included in all log entries via structlog context variables.
 """
 
 from __future__ import annotations
 
 import logging
 import sys
+import uuid
 
 import structlog
 
@@ -81,3 +85,33 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
         A :class:`structlog.stdlib.BoundLogger` that outputs JSON.
     """
     return structlog.get_logger(name)
+
+
+def new_session_id() -> str:
+    """Generate a new unique session identifier.
+
+    Returns:
+        A UUID4 string, e.g. ``"a1b2c3d4-e5f6-7890-abcd-ef1234567890"``.
+    """
+    return str(uuid.uuid4())
+
+
+def bind_session(session_id: str) -> None:
+    """Bind a ``session_id`` to the structlog context.
+
+    After calling this, every subsequent ``structlog`` log entry from any
+    logger will automatically include ``"session_id": "<value>"``.
+
+    Args:
+        session_id: The session identifier to bind.
+    """
+    structlog.contextvars.bind_contextvars(session_id=session_id)
+
+
+def unbind_session() -> None:
+    """Remove the ``session_id`` from the structlog context.
+
+    Call this at the end of a run to avoid leaking the session ID into
+    unrelated log entries.
+    """
+    structlog.contextvars.unbind_contextvars("session_id")

@@ -9,10 +9,14 @@
 
 The agent never imports a specific LLM SDK; it talks to any provider
 through :class:`~probe_agent.llm_client.LLMProvider`.
+
+Each run gets a unique ``session_id`` and is recorded by
+:class:`~probe_agent.session.SessionRecorder`.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -20,7 +24,9 @@ import structlog
 from probe_agent.config import Settings
 from probe_agent.context import ContextManager
 from probe_agent.llm_client import LLMProvider
+from probe_agent.logging_setup import bind_session, new_session_id, unbind_session
 from probe_agent.registry import ToolRegistry
+from probe_agent.session import SessionRecorder
 from probe_agent.types import AgentResult
 
 log = structlog.get_logger(__name__)
@@ -58,79 +64,115 @@ class ProbeAgent:
         reasoning turns and tool execution until the LLM produces a
         final text answer or *max_steps* is exhausted.
 
+        Each run gets a unique ``session_id`` and is recorded to
+        ``{project_path}/.probe/sessions/{session_id}.json``.
+
         Args:
             task: Natural-language description of what the agent should do.
 
         Returns:
             An :class:`AgentResult` summarising the run.
         """
+        # --- Session setup ---
+        session_id = new_session_id()
+        bind_session(session_id)
+
+        sessions_dir = Path(self.config.project_path) / ".probe" / "sessions"
+        recorder = SessionRecorder(session_id=session_id, output_dir=sessions_dir)
+
         system_prompt = self._build_system_prompt()
         self.context_mgr.add_user_message(task)
 
         final_response = ""
 
-        log.info("agent_loop_start", task=task[:200], max_steps=self.config.max_steps)
+        log.info(
+            "agent_loop_start",
+            task=task[:200],
+            max_steps=self.config.max_steps,
+        )
 
-        while self.step_count < self.config.max_steps:
-            self.step_count += 1
+        try:
+            while self.step_count < self.config.max_steps:
+                self.step_count += 1
 
-            # Retrieve the (possibly truncated) conversation window.
-            messages = self.context_mgr.get_messages()
-            tool_schemas = self.registry.get_schemas()
+                # Retrieve the (possibly truncated) conversation window.
+                messages = self.context_mgr.get_messages()
+                tool_schemas = self.registry.get_schemas()
 
-            log.debug(
-                "llm_call",
-                step=self.step_count,
-                messages=len(messages),
-                tools=len(tool_schemas),
-            )
+                log.debug(
+                    "llm_call",
+                    step=self.step_count,
+                    messages=len(messages),
+                    tools=len(tool_schemas),
+                )
 
-            # Ask the LLM.
-            response = await self.llm.chat(
-                messages=messages,
-                tools=tool_schemas,
-                system=system_prompt,
-            )
+                # Ask the LLM.
+                response = await self.llm.chat(
+                    messages=messages,
+                    tools=tool_schemas,
+                    system=system_prompt,
+                )
 
-            # Track token usage.
-            self.context_mgr.track_tokens(response.usage)
+                # Track token usage.
+                self.context_mgr.track_tokens(response.usage)
 
-            # ----- Case 1: tool calls ---------------------------------
-            if response.tool_calls:
-                self.context_mgr.add_model_tool_calls(response)
+                # Record LLM call.
+                recorder.record_llm_call(
+                    step_index=self.step_count,
+                    message_count=len(messages),
+                    tool_count=len(tool_schemas),
+                    usage=response.usage,
+                )
 
-                for tool_call in response.tool_calls:
-                    log.info(
-                        "executing_tool",
-                        step=self.step_count,
-                        tool=tool_call.name,
-                        args=tool_call.arguments,
-                    )
+                # ----- Case 1: tool calls -----------------------------
+                if response.tool_calls:
+                    self.context_mgr.add_model_tool_calls(response)
 
-                    result = await self.registry.execute(
-                        tool_call.name, tool_call.arguments,
-                    )
+                    for tool_call in response.tool_calls:
+                        log.info(
+                            "executing_tool",
+                            step=self.step_count,
+                            tool=tool_call.name,
+                            args=tool_call.arguments,
+                        )
 
-                    self.context_mgr.add_tool_result(
-                        tool_call.name, result, tool_call_id=tool_call.id,
-                    )
+                        result = await self.registry.execute(
+                            tool_call.name, tool_call.arguments,
+                        )
 
-                    log.info(
-                        "tool_completed",
-                        step=self.step_count,
-                        tool=tool_call.name,
-                        success=result.success,
-                        duration_ms=round(result.duration_ms, 1),
-                    )
+                        self.context_mgr.add_tool_result(
+                            tool_call.name, result, tool_call_id=tool_call.id,
+                        )
 
-                # Compress old context when the conversation grows long.
-                await self.context_mgr.maybe_summarize(self.llm)
+                        # Record to session.
+                        recorder.record_step(
+                            step_index=self.step_count,
+                            tool_name=tool_call.name,
+                            args=tool_call.arguments,
+                            result=result,
+                        )
 
-            # ----- Case 2: text answer — done -------------------------
-            else:
-                final_response = response.content or ""
-                self.context_mgr.add_model_message(final_response)
-                break
+                        log.info(
+                            "tool_completed",
+                            step=self.step_count,
+                            tool=tool_call.name,
+                            success=result.success,
+                            duration_ms=round(result.duration_ms, 1),
+                        )
+
+                    # Compress old context when the conversation grows long.
+                    await self.context_mgr.maybe_summarize(self.llm)
+
+                # ----- Case 2: text answer — done ---------------------
+                else:
+                    final_response = response.content or ""
+                    self.context_mgr.add_model_message(final_response)
+                    break
+
+        finally:
+            # Always save the session, even on error.
+            recorder.save()
+            unbind_session()
 
         success = self.step_count < self.config.max_steps or bool(final_response)
 
