@@ -81,7 +81,10 @@ def main(project: str, task: str) -> None:
     from probe_agent.tools.docker_tools import register_docker_tools
     from probe_agent.tools.fs import register_fs_tools
     from probe_agent.tools.git import register_git_tools
+    from probe_agent.tools.observe import register_observe_tools
+    from probe_agent.tools.project import register_project_tools
     from probe_agent.tools.shell import register_shell_tools
+    from probe_agent.tools.agent_tools import register_agent_tools
 
     # Create LLM provider.
     llm = create_llm_provider(
@@ -96,6 +99,12 @@ def main(project: str, task: str) -> None:
     register_git_tools(registry)
     register_docker_tools(registry)
     register_shell_tools(registry)
+    register_observe_tools(registry)
+    register_project_tools(registry)
+
+    # Agent tools are registered last — they close over the full registry
+    # and LLM so subagents can be spawned with scoped tool access.
+    register_agent_tools(registry, full_registry=registry, llm=llm)
 
     console.print(
         f"[dim]Tools:[/dim]    {registry.count()} across "
