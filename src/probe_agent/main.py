@@ -1,7 +1,10 @@
 """CLI entry-point for ProbeAgent.
 
-Uses ``click`` to expose the ``probe-agent`` command.  Wires up the
-LLM provider, tool registry, and agent loop.
+Uses ``click`` to expose the ``probe-agent`` command group with two
+subcommands:
+
+- ``probe-agent run``  — run the agent on a task
+- ``probe-agent eval`` — run evaluation scenarios
 """
 
 from __future__ import annotations
@@ -19,7 +22,13 @@ from probe_agent.logging_setup import get_logger, setup_logging
 console = Console()
 
 
-@click.command(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.version_option(version=__version__, prog_name="probe-agent")
+def cli() -> None:
+    """ProbeAgent — autonomous DevOps/SRE agent."""
+
+
+@cli.command()
 @click.option(
     "--project",
     required=True,
@@ -27,17 +36,13 @@ console = Console()
     help="Path to the project the agent should operate on.",
 )
 @click.argument("task")
-@click.version_option(version=__version__, prog_name="probe-agent")
-def main(project: str, task: str) -> None:
-    """ProbeAgent — autonomous DevOps/SRE agent.
-
-    Runs TASK against the project at --project, using a pluggable LLM
-    provider for reasoning and tools for interacting with infrastructure.
+def run(project: str, task: str) -> None:
+    """Run the agent on a TASK against the project at --project.
 
     \b
     Examples:
-        probe-agent --project ./my-app "check container health"
-        probe-agent --project /srv/api  "find the root cause of 5xx errors"
+        probe-agent run --project ./my-app "check container health"
+        probe-agent run --project /srv/api  "find the root cause of 5xx errors"
     """
     # --- Bootstrap ----------------------------------------------------------
     try:
@@ -53,7 +58,6 @@ def main(project: str, task: str) -> None:
     log = get_logger("probe_agent.main")
 
     # --- Banner -------------------------------------------------------------
-    # Resolve the display model name.
     display_model = settings.llm_model or f"{settings.llm_provider} (default)"
 
     console.print(
@@ -78,13 +82,13 @@ def main(project: str, task: str) -> None:
     from probe_agent.agent import ProbeAgent
     from probe_agent.llm_client import create_llm_provider
     from probe_agent.registry import ToolRegistry
+    from probe_agent.tools.agent_tools import register_agent_tools
     from probe_agent.tools.docker_tools import register_docker_tools
     from probe_agent.tools.fs import register_fs_tools
     from probe_agent.tools.git import register_git_tools
     from probe_agent.tools.observe import register_observe_tools
     from probe_agent.tools.project import register_project_tools
     from probe_agent.tools.shell import register_shell_tools
-    from probe_agent.tools.agent_tools import register_agent_tools
 
     # Create LLM provider.
     llm = create_llm_provider(
@@ -146,5 +150,60 @@ def main(project: str, task: str) -> None:
     )
 
 
+@cli.command(name="eval")
+@click.option(
+    "--project",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, resolve_path=True),
+    help="Path to the project to evaluate against.",
+)
+@click.option(
+    "--scenario",
+    "-s",
+    "scenario_names",
+    multiple=True,
+    help="Run specific scenario(s) by name. Omit to run all.",
+)
+def eval_cmd(project: str, scenario_names: tuple[str, ...]) -> None:
+    """Run evaluation scenarios against a project.
+
+    \b
+    Examples:
+        probe-agent eval --project ./my-app
+        probe-agent eval --project ./my-app -s container_health -s project_analysis
+    """
+    try:
+        settings: Settings = load_settings()
+    except Exception as exc:
+        console.print(f"[bold red]Configuration error:[/bold red] {exc}")
+        sys.exit(1)
+
+    settings.project_path = project
+    setup_logging(level=settings.log_level)
+
+    from probe_agent.eval.harness import EvalHarness
+
+    harness = EvalHarness(project_path=project, config=settings)
+
+    try:
+        names = list(scenario_names) if scenario_names else None
+        results = asyncio.run(harness.run_all(scenario_names=names))
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted by user.[/yellow]")
+        sys.exit(130)
+    except Exception as exc:
+        console.print(f"\n[bold red]Eval error:[/bold red] {exc}")
+        sys.exit(1)
+
+    # Exit non-zero if any scenario failed.
+    failed = sum(1 for r in results if not r.passed)
+    if failed:
+        sys.exit(1)
+
+
+# Keep backward compatibility: `main` is the entry point.
+main = cli
+
+
 if __name__ == "__main__":
-    main()
+    cli()
