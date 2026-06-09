@@ -1,0 +1,3 @@
+
+[notice] A new release of pip is available: 26.0.1 -> 26.1.2
+[notice] To update, run: /Users/elcid/Desktop/sre-agent/probe-agent/.venv/bin/python3.14 -m pip install --upgrade pip

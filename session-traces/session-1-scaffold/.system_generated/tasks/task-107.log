@@ -1,0 +1,5 @@
+Successfully scheduled one-shot timer.
+Expected to fire at: 2026-06-06T14:24:47+01:00
+Prompt: Check if clean reinstall completed
+
+[2026-06-06T14:22:47+01:00] Timer cancelled: agent received a message during wait.

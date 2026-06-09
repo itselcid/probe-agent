@@ -1,0 +1,5 @@
+  Attempting uninstall: probe-agent
+    Found existing installation: probe-agent 0.1.0
+    Uninstalling probe-agent-0.1.0:
+      Successfully uninstalled probe-agent-0.1.0
+Successfully installed probe-agent-0.1.0
